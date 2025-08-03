@@ -14,9 +14,10 @@ interface ShaResult {
 }
 
 async function fetchOpenTablePage(): Promise<string> {
-  const browser = await puppeteer.launch({ 
-    headless: "new", 
-    args: ["--no-sandbox", "--disable-setuid-sandbox"] 
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    executablePath: process.env.CHROMIUM_PATH || undefined
   });
 
   try {
