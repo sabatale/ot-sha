@@ -171,74 +171,97 @@ async function fetchJsContent(url: string): Promise<{ url: string; text: string 
 
 async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
   const { allLinks, fetchedContent } = extractResult;
-
+  
   // Separate already fetched files from ones we still need to fetch
   const alreadyFetched = Array.from(fetchedContent.keys());
   const stillNeedToFetch = allLinks.filter(url => !fetchedContent.has(url));
-
+  
   console.log(`Already fetched: ${alreadyFetched.length} files`);
   console.log(`Still need to fetch: ${stillNeedToFetch.length} files`);
 
-  const responses: Awaited<ReturnType<typeof fetchJsContent>>[] = [];
+  let availabilitySha: string | null = null;
+  let multiSha: string | null = null;
+  const errors: string[] = [];
 
-  // Add already fetched content
+  // First, search through already cached content
   for (const [url, text] of fetchedContent) {
-    responses.push({ url, text, error: null });
+    if (!availabilitySha && text.includes('"RestaurantsAvailability"')) {
+      console.log(`Found "RestaurantsAvailability" in ${url.split('/').pop()}`);
+      const docIdMatch = text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
+      if (docIdMatch) {
+        availabilitySha = docIdMatch[1] ?? null;
+        console.log(`Availability SHA: ${availabilitySha}`);
+      }
+    }
+    
+    if (!multiSha && text.includes('"MultiSearchResults"')) {
+      console.log(`Found "MultiSearchResults" in ${url.split('/').pop()}`);
+      const docIdMatch = text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
+      if (docIdMatch) {
+        multiSha = docIdMatch[1] ?? null;
+        console.log(`Multi Search SHA: ${multiSha}`);
+      }
+    }
+    
+    // Early exit if both found
+    if (availabilitySha && multiSha) {
+      console.log(`✅ Both SHAs found in cached files! Skipping remaining downloads.`);
+      return { availabilitySha, multiSha, errors };
+    }
   }
 
-  // Fetch remaining files
+  // Fetch remaining files one by one, searching each immediately
   for (let i = 0; i < stillNeedToFetch.length; i++) {
+    // Early exit if both found
+    if (availabilitySha && multiSha) {
+      console.log(`✅ Both SHAs found! Skipping remaining ${stillNeedToFetch.length - i} files.`);
+      break;
+    }
+
     const url = stillNeedToFetch[i];
     if (!url) {
       console.warn(`Skipping empty URL at index ${i}`);
       continue;
     }
-    console.log(`Processing remaining file ${i + 1}/${stillNeedToFetch.length}: ${url.split('/').pop()}`);
+    
+    console.log(`Processing file ${i + 1}/${stillNeedToFetch.length}: ${url.split('/').pop()}`);
 
     const response = await fetchJsContent(url);
-    responses.push(response);
-
-    if (i < stillNeedToFetch.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Delay
+    
+    if (response.error) {
+      errors.push(response.error);
+      continue;
     }
-  }
 
-  // Filter out failed requests
-  const errors = responses.filter(res => res.error).map(res => res.error!);
-  const validResponses = responses.filter(res => !res.error && res.text);
-
-  console.log(`Successfully processed ${validResponses.length}/${responses.length} JS files`);
-
-  let availabilitySha: string | null = null;
-  let multiSha: string | null = null;
-  const remainingResponses: typeof validResponses = [];
-
-  // 1. Search for "RestaurantsAvailability" first
-  for (const response of validResponses) {
-    if (response.text!.includes('"RestaurantsAvailability"')) {
-      console.log(`Found "RestaurantsAvailability" in ${response.url.split('/').pop()}`);
-      const docIdMatch = response.text!.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
-      if (docIdMatch) {
-        availabilitySha = docIdMatch[1] ?? null;
-        console.log(`Availability SHA: ${availabilitySha}`);
+    if (response.text) {
+      // Search immediately after fetching
+      if (!availabilitySha && response.text.includes('"RestaurantsAvailability"')) {
+        console.log(`Found "RestaurantsAvailability" in ${response.url.split('/').pop()}`);
+        const docIdMatch = response.text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
+        if (docIdMatch) {
+          availabilitySha = docIdMatch[1] ?? null;
+          console.log(`Availability SHA: ${availabilitySha}`);
+        }
       }
-    } else {
-      remainingResponses.push(response);
-    }
-  }
-
-  // 2. Search for "MultiSearchResults" in remaining files
-  for (const response of remainingResponses) {
-    if (response.text!.includes('"MultiSearchResults"')) {
-      console.log(`Found "MultiSearchResults" in ${response.url.split('/').pop()}`);
-      const docIdMatch = response.text!.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
-      if (docIdMatch) {
-        multiSha = docIdMatch[1] ?? null;
-        console.log(`Multi Search SHA: ${multiSha}`);
-        break; // Only take the first match
+      
+      if (!multiSha && response.text.includes('"MultiSearchResults"')) {
+        console.log(`Found "MultiSearchResults" in ${response.url.split('/').pop()}`);
+        const docIdMatch = response.text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
+        if (docIdMatch) {
+          multiSha = docIdMatch[1] ?? null;
+          console.log(`Multi Search SHA: ${multiSha}`);
+        }
       }
     }
+
+    // Add delay only if we need to continue
+    if (i < stillNeedToFetch.length - 1 && !(availabilitySha && multiSha)) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
   }
+
+  const totalProcessed = alreadyFetched.length + stillNeedToFetch.length;
+  console.log(`Successfully processed files with ${errors.length} errors`);
 
   return { availabilitySha, multiSha, errors };
 }
