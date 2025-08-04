@@ -10,6 +10,7 @@ const OUTPUT_FILE = `${OUTPUT_DIR}/secrets.json`;
 interface ShaResult {
   availabilitySha: string | null;
   multiSha: string | null;
+  autoSha: string | null;
   errors: string[];
 }
 
@@ -171,16 +172,17 @@ async function fetchJsContent(url: string): Promise<{ url: string; text: string 
 
 async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
   const { allLinks, fetchedContent } = extractResult;
-  
+
   // Separate already fetched files from ones we still need to fetch
   const alreadyFetched = Array.from(fetchedContent.keys());
   const stillNeedToFetch = allLinks.filter(url => !fetchedContent.has(url));
-  
+
   console.log(`Already fetched: ${alreadyFetched.length} files`);
   console.log(`Still need to fetch: ${stillNeedToFetch.length} files`);
 
   let availabilitySha: string | null = null;
   let multiSha: string | null = null;
+  let autoSha: string | null = null;
   const errors: string[] = [];
 
   // First, search through already cached content
@@ -193,7 +195,7 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
         console.log(`Availability SHA: ${availabilitySha}`);
       }
     }
-    
+
     if (!multiSha && text.includes('"MultiSearchResults"')) {
       console.log(`Found "MultiSearchResults" in ${url.split('/').pop()}`);
       const docIdMatch = text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
@@ -202,19 +204,28 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
         console.log(`Multi Search SHA: ${multiSha}`);
       }
     }
-    
-    // Early exit if both found
-    if (availabilitySha && multiSha) {
-      console.log(`✅ Both SHAs found in cached files! Skipping remaining downloads.`);
-      return { availabilitySha, multiSha, errors };
+
+    if (!autoSha && text.includes('"autocompleteResults"')) {
+      console.log(`Found "autocompleteResults" in ${url.split('/').pop()}`);
+      const docIdMatch = text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
+      if (docIdMatch) {
+        autoSha = docIdMatch[1] ?? null;
+        console.log(`Auto SHA: ${autoSha}`);
+      }
+    }
+
+    // Early exit if all found
+    if (availabilitySha && multiSha && autoSha) {
+      console.log(`✅ All SHAs found in cached files! Skipping remaining downloads.`);
+      return { availabilitySha, multiSha, autoSha, errors };
     }
   }
 
   // Fetch remaining files one by one, searching each immediately
   for (let i = 0; i < stillNeedToFetch.length; i++) {
-    // Early exit if both found
-    if (availabilitySha && multiSha) {
-      console.log(`✅ Both SHAs found! Skipping remaining ${stillNeedToFetch.length - i} files.`);
+    // Early exit if all found
+    if (availabilitySha && multiSha && autoSha) {
+      console.log(`✅ All SHAs found! Skipping remaining ${stillNeedToFetch.length - i} files.`);
       break;
     }
 
@@ -223,11 +234,11 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
       console.warn(`Skipping empty URL at index ${i}`);
       continue;
     }
-    
+
     console.log(`Processing file ${i + 1}/${stillNeedToFetch.length}: ${url.split('/').pop()}`);
 
     const response = await fetchJsContent(url);
-    
+
     if (response.error) {
       errors.push(response.error);
       continue;
@@ -243,7 +254,7 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
           console.log(`Availability SHA: ${availabilitySha}`);
         }
       }
-      
+
       if (!multiSha && response.text.includes('"MultiSearchResults"')) {
         console.log(`Found "MultiSearchResults" in ${response.url.split('/').pop()}`);
         const docIdMatch = response.text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
@@ -252,10 +263,19 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
           console.log(`Multi Search SHA: ${multiSha}`);
         }
       }
+
+      if (!autoSha && response.text.includes('"autocompleteResults"')) {
+        console.log(`Found "autocompleteResults" in ${response.url.split('/').pop()}`);
+        const docIdMatch = response.text.match(/\.documentId\s*=\s*['"]([^'"]+)['"]/);
+        if (docIdMatch) {
+          autoSha = docIdMatch[1] ?? null;
+          console.log(`Auto SHA: ${autoSha}`);
+        }
+      }
     }
 
     // Add delay only if we need to continue
-    if (i < stillNeedToFetch.length - 1 && !(availabilitySha && multiSha)) {
+    if (i < stillNeedToFetch.length - 1 && !(availabilitySha && multiSha && autoSha)) {
       await new Promise(resolve => setTimeout(resolve, 2000));
     }
   }
@@ -263,12 +283,21 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
   const totalProcessed = alreadyFetched.length + stillNeedToFetch.length;
   console.log(`Successfully processed files with ${errors.length} errors`);
 
-  return { availabilitySha, multiSha, errors };
+  return { availabilitySha, multiSha, autoSha, errors };
 }
-
 
 async function main(): Promise<void> {
   try {
+    // Load existing values if file exists
+    let existingData = { availabilitySha: null, multiSha: null, autoSha: null };
+    try {
+      const existingFile = await fs.readFile(OUTPUT_FILE, 'utf-8');
+      existingData = JSON.parse(existingFile);
+      console.log("Loaded existing SHA values as fallback");
+    } catch {
+      console.log("No existing secrets file found");
+    }
+
     // 1. Fetch the OpenTable search page
     const htmlContent = await fetchOpenTablePage();
 
@@ -283,30 +312,41 @@ async function main(): Promise<void> {
     // 3. Analyze JS files for SHA values (using cached content when available)
     const shaResult = await getShaValues(extractResult);
 
-    // 4. Validate results
-    if (!shaResult.availabilitySha && !shaResult.multiSha) {
-      console.error("Missing tokens.");
-      process.exit(1);
-    }
-
-    // 5. Prepare output data
+    // 4. Prepare output data with fallbacks
     const outputData = {
       timestamp: Date.now(),
-      availabilitySha: shaResult.availabilitySha,
-      multiSha: shaResult.multiSha,
+      availabilitySha: shaResult.availabilitySha || existingData.availabilitySha,
+      multiSha: shaResult.multiSha || existingData.multiSha,
+      autoSha: shaResult.autoSha || existingData.autoSha,
       errors: shaResult.errors,
-      // Legacy format for compatibility
-      //documentIds: [shaResult.availabilitySha, shaResult.multiSha].filter(Boolean)
     };
+
+    // 5. Validate results - only fail if we have no valid SHAs at all
+    if (!outputData.availabilitySha && !outputData.multiSha && !outputData.autoSha) {
+      console.error("No valid SHAs found and no existing values to preserve!");
+      process.exit(1);
+    }
 
     // 6. Write to file
     await fs.mkdir(OUTPUT_DIR, { recursive: true });
     await fs.writeFile(OUTPUT_FILE, JSON.stringify(outputData, null, 2));
 
     console.log("\n=== RESULTS ===");
-    console.log(`Availability SHA: ${shaResult.availabilitySha || 'NOT FOUND'}`);
-    console.log(`Multi Search SHA: ${shaResult.multiSha || 'NOT FOUND'}`);
+    console.log(`Availability SHA: ${outputData.availabilitySha || 'NOT FOUND'}`);
+    console.log(`Multi Search SHA: ${outputData.multiSha || 'NOT FOUND'}`);
+    console.log(`Auto SHA: ${outputData.autoSha || 'NOT FOUND'}`);
     console.log(`Results written to: ${OUTPUT_FILE}`);
+
+    // Show which values were preserved from existing file
+    if (shaResult.availabilitySha !== outputData.availabilitySha && outputData.availabilitySha) {
+      console.log("⚠️  Using existing availability SHA (new value not found)");
+    }
+    if (shaResult.multiSha !== outputData.multiSha && outputData.multiSha) {
+      console.log("⚠️  Using existing multi SHA (new value not found)");
+    }
+    if (shaResult.autoSha !== outputData.autoSha && outputData.autoSha) {
+      console.log("⚠️  Using existing auto SHA (new value not found)");
+    }
 
     if (shaResult.errors.length > 0) {
       console.log(`\nErrors encountered: ${shaResult.errors.length}`);
