@@ -24,6 +24,10 @@ async function fetchOpenTablePage(): Promise<string> {
   try {
     const page = await browser.newPage();
     console.log("Opening OpenTable search page...");
+    // set UA before navigation to reduce bot detection
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+    );
     await page.goto("https://www.opentable.com/s", { waitUntil: "domcontentloaded" });
 
     const htmlContent = await page.content();
@@ -64,6 +68,7 @@ async function extractJsLinks(htmlContent: string): Promise<ExtractResult> {
 
   if (multiSearchLinks.length === 0) {
     console.error("No multi-search JS files found in HTML!");
+    console.log(htmlContent);
     return { allLinks: [], fetchedContent: new Map() };
   }
 
@@ -120,11 +125,11 @@ async function fetchJsContent(url: string): Promise<{ url: string; text: string 
       console.log(`Fetching: ${url.split('/').pop()} (attempt ${attempt}/${maxRetries})`);
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // Increased timeout
+      const timeoutId = setTimeout(() => (controller as any).abort(), 15000); // Increased timeout
 
       const response = await fetch(url, {
         method: 'GET',
-        signal: controller.signal,
+        signal: (controller as any).signal,
         headers: {
           'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
           'accept-language': 'en-CA,en;q=0.9,fr;q=0.8,en-US;q=0.7',
@@ -276,7 +281,8 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
 
     // Add delay only if we need to continue
     if (i < stillNeedToFetch.length - 1 && !(availabilitySha && multiSha && autoSha)) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      const delay = 1500 + Math.random() * 1500;
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 
