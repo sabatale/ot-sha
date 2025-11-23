@@ -2,7 +2,6 @@ name: Update OT SHA Secrets
 
 on:
   workflow_dispatch:
-  
   schedule:
     - cron: '0 * * * *'
 
@@ -51,3 +50,58 @@ jobs:
           else
             echo "No changes to commit"
           fi
+
+      # Failure streak logic starts here
+
+      - name: Download streak
+        uses: actions/download-artifact@v4
+        with:
+          name: fail_streak
+          path: .    # download the artifact into the repo root so streak.txt is at ./streak.txt
+        continue-on-error: true
+
+      - name: Read streak
+        id: streak
+        run: |
+          if [ -f ./streak.txt ]; then
+            echo "count=$(cat ./streak.txt)" >> $GITHUB_OUTPUT
+          else
+            echo "count=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update streak
+        id: update
+        if: always()
+        run: |
+          c="${{ steps.streak.outputs.count }}"
+          if [ -z "$c" ]; then c=0; fi
+
+          if [ "${{ job.status }}" = "failure" ]; then
+            c=$((c+1))
+          else
+            c=0
+          fi
+
+          echo "$c" > streak.txt
+          echo "newcount=$c" >> $GITHUB_OUTPUT
+
+      - name: Notify on too many failures
+        if: ${{ job.status == 'failure' }}
+        run: |
+          c="${{ steps.update.outputs.newcount }}"
+          if [ -z "$c" ]; then c=0; fi
+
+          # notify when streak is 5 or greater (change -ge to -gt 5 if you want >5)
+          if [ "$c" -ge 5 ]; then
+            echo "Send your alert here (streak=$c)"
+            # Put your Slack or email command here
+          else
+            echo "No alert yet (streak=$c)"
+          fi
+
+      - name: Upload updated streak
+        uses: actions/upload-artifact@v4
+        with:
+          name: fail_streak
+          path: streak.txt
+          overwrite: true
