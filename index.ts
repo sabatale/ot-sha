@@ -6,6 +6,7 @@ puppeteer.use(StealthPlugin());
 
 const OUTPUT_DIR = "secrets";
 const OUTPUT_FILE = `${OUTPUT_DIR}/secrets.json`;
+const DEBUG = true;
 
 interface ShaResult {
   availabilitySha: string | null;
@@ -17,21 +18,74 @@ interface ShaResult {
 async function fetchOpenTablePage(): Promise<string> {
   const browser = await puppeteer.launch({
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-dev-shm-usage"
+    ],
     executablePath: process.env.CHROMIUM_PATH || undefined
   });
 
   try {
     const page = await browser.newPage();
-    console.log("Opening OpenTable search page...");
-    // set UA before navigation to reduce bot detection
+    
+    // More realistic viewport
+    await page.setViewport({ width: 1920, height: 1080 });
+    
+    // Set realistic headers and UA
     await page.setUserAgent(
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
     );
-    await page.goto("https://www.opentable.com/s", { waitUntil: "domcontentloaded" });
+    
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1'
+    });
+
+    // Remove webdriver property
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => undefined,
+      });
+    });
+
+    console.log("Opening OpenTable search page...");
+    await page.goto("https://www.opentable.com/landmark/restaurants-near-times-square-manhattan", { 
+      waitUntil: "networkidle2",
+      timeout: 30000 
+    });
+
+    if (DEBUG) {
+      console.log(`Current URL: ${page.url()}`);
+    }
+
+    // Wait a bit for any dynamic content
+    await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000));
 
     const htmlContent = await page.content();
     const headContent = htmlContent.split('</head>')[0] || htmlContent;
+
+    // Check if we got blocked
+    if (headContent.length < 1000) {
+      console.warn("⚠️  Received very short HTML response - possible bot detection");
+      console.log("First 500 chars:", headContent.substring(0, 500));
+    }
+
+    if (DEBUG) {
+      console.log("\n=== DEBUG: Full HTML Content ===");
+      console.log(htmlContent);
+      console.log("=== END DEBUG ===\n");
+      
+      // Save to file for inspection
+      await fs.writeFile("debug-page.html", htmlContent, "utf-8");
+      console.log("Full page saved to debug-page.html");
+      console.log(`Final URL: ${page.url()}`);
+    }
 
     return headContent;
   } finally {
@@ -68,7 +122,13 @@ async function extractJsLinks(htmlContent: string): Promise<ExtractResult> {
 
   if (multiSearchLinks.length === 0) {
     console.error("No multi-search JS files found in HTML!");
-    console.log(htmlContent);
+    if (DEBUG) {
+      console.log("\n=== DEBUG: HTML Head Content ===");
+      console.log(htmlContent);
+      console.log("=== END DEBUG ===\n");
+    } else {
+      console.log(htmlContent);
+    }
     return { allLinks: [], fetchedContent: new Map() };
   }
 
@@ -281,7 +341,7 @@ async function getShaValues(extractResult: ExtractResult): Promise<ShaResult> {
 
     // Add delay only if we need to continue
     if (i < stillNeedToFetch.length - 1 && !(availabilitySha && multiSha && autoSha)) {
-      const delay = 1500 + Math.random() * 1500;
+      const delay = 2000 + Math.random() * 2000; // 2-4 seconds
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }

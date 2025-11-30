@@ -34,11 +34,14 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: 'true'
 
       - name: Run the secret scraper
+        id: scraper
         run: bun start
+        continue-on-error: true
         env:
           CHROMIUM_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
 
       - name: Commit and push if changed
+        if: steps.scraper.outcome == 'success'
         run: |
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
@@ -54,13 +57,15 @@ jobs:
       # Failure streak logic starts here
 
       - name: Download streak
+        if: always()
         uses: actions/download-artifact@v4
         with:
           name: fail_streak
-          path: .    # download the artifact into the repo root so streak.txt is at ./streak.txt
+          path: .
         continue-on-error: true
 
       - name: Read streak
+        if: always()
         id: streak
         run: |
           if [ -f ./streak.txt ]; then
@@ -70,13 +75,13 @@ jobs:
           fi
 
       - name: Update streak
-        id: update
         if: always()
+        id: update
         run: |
           c="${{ steps.streak.outputs.count }}"
           if [ -z "$c" ]; then c=0; fi
 
-          if [ "${{ job.status }}" = "failure" ]; then
+          if [ "${{ steps.scraper.outcome }}" != "success" ]; then
             c=$((c+1))
           else
             c=0
@@ -86,22 +91,20 @@ jobs:
           echo "newcount=$c" >> $GITHUB_OUTPUT
 
       - name: Notify on too many failures
-        if: ${{ job.status == 'failure' }}
+        if: always() && steps.scraper.outcome != 'success' && steps.update.outputs.newcount >= 5
         run: |
           c="${{ steps.update.outputs.newcount }}"
-          if [ -z "$c" ]; then c=0; fi
-
-          # notify when streak is 5 or greater (change -ge to -gt 5 if you want >5)
-          if [ "$c" -ge 5 ]; then
-            echo "Send your alert here (streak=$c)"
-            # Put your Slack or email command here
-          else
-            echo "No alert yet (streak=$c)"
-          fi
+          echo "🚨 ALERT: Scraper has failed $c times in a row!"
+          # Put your Slack or email command here
 
       - name: Upload updated streak
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fail_streak
           path: streak.txt
           overwrite: true
+          
+      - name: Fail job if scraper failed
+        if: steps.scraper.outcome != 'success'
+        run: exit 1
