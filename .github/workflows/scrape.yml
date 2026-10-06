@@ -4,107 +4,91 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 * * * *'
+  pull_request:
+    paths:
+      - '**.js'
+      - 'package*.json'
+      - '.github/workflows/scrape.yml'
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ot-sha-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  update:
+  test:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          bun-version: latest
-
-      - name: Setup Chrome
-        uses: browser-actions/setup-chrome@v1
-        id: setup-chrome
+          node-version: '22'
+          cache: npm
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
         with:
           chrome-version: stable
-
-      - name: Install dependencies
-        run: bun i
+      - run: npm ci
+      - run: npm test
         env:
-          PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: 'true'
-          PUPPETEER_SKIP_DOWNLOAD: 'true'
+          CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
 
-      - name: Run the secret scraper
-        id: scraper
-        run: bun start
-        continue-on-error: true
-        env:
-          CHROMIUM_PATH: ${{ steps.setup-chrome.outputs.chrome-path }}
-
-      - name: Commit and push if changed
-        if: steps.scraper.outcome == 'success'
-        run: |
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          
-          if [ -n "$(git status --porcelain secrets/)" ]; then
-            git add secrets/
-            git commit -m "chore: Automatic update of OT SHA values"
-            git push
-          else
-            echo "No changes to commit"
-          fi
-
-      # Failure streak logic starts here
-
-      - name: Download streak
-        if: always()
-        uses: actions/download-artifact@v4
+  update:
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          name: fail_streak
-          path: .
-        continue-on-error: true
+          node-version: '22'
+          cache: npm
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+      - run: npm ci
+      - name: Extract fresh query hashes
+        id: scraper
+        run: npm start
+        env:
+          CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
 
-      - name: Read streak
+      - name: Publish run summary
         if: always()
-        id: streak
+        env:
+          SCRAPER_OUTCOME: ${{ steps.scraper.outcome }}
         run: |
-          if [ -f ./streak.txt ]; then
-            echo "count=$(cat ./streak.txt)" >> $GITHUB_OUTPUT
-          else
-            echo "count=0" >> $GITHUB_OUTPUT
+          echo "## OpenTable hash extraction" >> "$GITHUB_STEP_SUMMARY"
+          echo "Scraper outcome: $SCRAPER_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f temp/run-report.json ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat temp/run-report.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: Update streak
-        if: always()
-        id: update
-        run: |
-          c="${{ steps.streak.outputs.count }}"
-          if [ -z "$c" ]; then c=0; fi
-
-          if [ "${{ steps.scraper.outcome }}" != "success" ]; then
-            c=$((c+1))
-          else
-            c=0
-          fi
-
-          echo "$c" > streak.txt
-          echo "newcount=$c" >> $GITHUB_OUTPUT
-
-      - name: Notify on too many failures
-        if: always() && steps.scraper.outcome != 'success' && steps.update.outputs.newcount >= 5
-        run: |
-          c="${{ steps.update.outputs.newcount }}"
-          echo "🚨 ALERT: Scraper has failed $c times in a row!"
-          # Put your Slack or email command here
-
-      - name: Upload updated streak
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fail_streak
-          path: streak.txt
-          overwrite: true
-          
-      - name: Fail job if scraper failed
-        if: steps.scraper.outcome != 'success'
-        run: exit 1
+          name: scrape-diagnostics
+          path: temp/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Commit fresh results
+        if: success() && steps.scraper.outcome == 'success'
+        run: |
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add secrets/secrets.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: Automatic update of OT SHA values"
+            git push
+          fi
