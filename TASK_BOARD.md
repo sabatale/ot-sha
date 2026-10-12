@@ -1,7 +1,7 @@
 # Active tasks
 
-- In Progress: Suppress scheduled/manual failure notifications until three consecutive failed refreshes; verify history counting, full suite, and deployed workflow.
-- Complete: Notification-policy and full browser/fixture suite: 16 tests passed, 0 failed, 0 skipped. Raw output: `temp/notification-tests.log`. Official actionlint validation passed. Hosted verification pending.
+- Complete: Suppress scheduled/manual failure notifications until three consecutive failed refreshes. Published in `133dfb9f`; [hosted run 38277520507](https://github.com/sabatale/ot-sha/actions/runs/38277520507) succeeded. Its policy correctly found the previous single failure and enabled tolerance. The successful refresh resets the streak.
+- Complete: Notification-policy and full browser/fixture suite: 16 tests passed, 0 failed, 0 skipped both locally and on GitHub. Raw output: `temp/notification-tests.log` and `temp/notification-hosted-test.log`. Official actionlint validation passed. Hosted extraction analyzed 258 assets with zero errors, found all three fresh hashes, and published commit `788dfeb`. Policy/update logs: `temp/notification-hosted-policy.log`, `temp/notification-hosted-update.log`. Threshold failure sequences verified with fixtures; no intentional production failures generated.
 - Complete: Repair extraction, stale-success handling, and GitHub Actions diagnostics.
 - Complete: Full bundled suite passed with the final installed dependencies: 10 tests, 10 passed, 0 failed, 0 skipped. Includes a running local HTTP fixture server and real headless Chrome. Raw output: `temp/test-run.log`.
 - Complete: Live CLI extraction succeeded on 2026-10-06: 258 assets analyzed, zero download/parse errors, all three hashes freshly found. Output: `temp/live-secrets.json`; provenance: `temp/run-report.json`; raw output: `temp/live-run.log`. The tracked consumer file was left untouched during verification.
