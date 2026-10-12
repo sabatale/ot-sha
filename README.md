@@ -22,7 +22,9 @@ The scraper captures loaded JavaScript and downloads missing chunks within the s
 - Success means all three valid hashes were freshly observed, even if their values did not change. The timestamp records that successful extraction.
 - Failure exits nonzero and leaves the prior output file and timestamp untouched. Old values are never presented as a fresh success.
 - `temp/run-report.json` contains status, sources, counts, and errors. `temp/debug-page.html` contains the page for troubleshooting; HTML is not dumped into console logs.
-- GitHub Actions tests first, publishes a run summary and seven-day diagnostics artifact, and commits only after successful extraction. Failed jobs use normal GitHub Actions notifications according to your notification settings.
+- GitHub Actions tests first, publishes a run summary and seven-day diagnostics artifact, and commits only after successful extraction.
+- Scheduled and manual refreshes tolerate the first two consecutive failed runs; the third and subsequent failures trigger normal GitHub failure notifications. A successful refresh resets the streak. The first two failures have a successful overall workflow status, but failed jobs/steps and diagnostics remain visible. History comes from actual job/step results, not the tolerated workflow status. PR checks fail immediately, and a failed test never allows publication. Cancelled runs break the streak; reruns use the latest attempt of each run.
+- If GitHub history cannot be read, the notification-policy job fails visibly rather than guessing the streak or silently disabling monitoring.
 - Successful extraction does not prove that a downstream GraphQL request accepts the hashes. That requires a separate request-level check.
 
 ## Verification

@@ -1,5 +1,7 @@
 # Active tasks
 
+- In Progress: Suppress scheduled/manual failure notifications until three consecutive failed refreshes; verify history counting, full suite, and deployed workflow.
+- Complete: Notification-policy and full browser/fixture suite: 16 tests passed, 0 failed, 0 skipped. Raw output: `temp/notification-tests.log`. Official actionlint validation passed. Hosted verification pending.
 - Complete: Repair extraction, stale-success handling, and GitHub Actions diagnostics.
 - Complete: Full bundled suite passed with the final installed dependencies: 10 tests, 10 passed, 0 failed, 0 skipped. Includes a running local HTTP fixture server and real headless Chrome. Raw output: `temp/test-run.log`.
 - Complete: Live CLI extraction succeeded on 2026-10-06: 258 assets analyzed, zero download/parse errors, all three hashes freshly found. Output: `temp/live-secrets.json`; provenance: `temp/run-report.json`; raw output: `temp/live-run.log`. The tracked consumer file was left untouched during verification.
@@ -7,6 +9,8 @@
 
 # Decision log
 
+- 2026-10-12: User requested failure notifications only after three consecutive failures. Count actual test/update job and step failures from the latest attempts in GitHub history, including tolerated failures. Tolerate only the first two scheduled/manual failures; success resets the streak. Keep PR checks strict and gate publication on an explicit successful-test output. History lookup failures remain visible instead of silently disabling alerts.
+- 2026-10-12: Run 38275413394 extracted all three hashes with 258 assets and zero errors; GitHub rejected the final push with Internal Server Error. The preceding 19 runs succeeded. No scraper change is indicated by this incident.
 - 2026-10-06: The supplied run downloaded no assets but reused all old hashes and advanced the timestamp. Require all three fresh values before publishing; leave old data untouched and fail the job otherwise.
 - 2026-10-06: Use the existing browser session for asset capture/downloads. Closing Chrome and then fetching with a separate HTTP client loses the browser request context; the supplied abort logs do not establish the precise network cause.
 - 2026-10-06: Match GraphQL documents through a static JavaScript parser, never by taking the first documentId in a bundle and never by executing downloaded code.

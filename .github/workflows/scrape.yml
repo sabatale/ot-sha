@@ -18,9 +18,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  notification-policy:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tolerate: ${{ steps.policy.outputs.tolerate }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check consecutive refresh failures
+        id: policy
+        run: node scripts/notification-policy.js
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
   test:
+    needs: notification-policy
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.notification-policy.result == 'success') }}
+    continue-on-error: ${{ github.event_name != 'pull_request' && needs.notification-policy.outputs.tolerate == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      passed: ${{ steps.verified.outputs.passed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,10 +60,13 @@ jobs:
       - run: npm test
         env:
           CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
+      - id: verified
+        run: echo "passed=true" >> "$GITHUB_OUTPUT"
 
   update:
-    if: github.event_name != 'pull_request'
-    needs: test
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.test.outputs.passed == 'true' }}
+    needs: [notification-policy, test]
+    continue-on-error: ${{ needs.notification-policy.outputs.tolerate == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
