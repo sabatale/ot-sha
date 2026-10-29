@@ -3,7 +3,8 @@ name: Update OT SHA Secrets
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'
+    # One job per run: Actions bills each job as a whole minute, so splitting it would triple the cost.
+    - cron: '17 */3 * * *'
   pull_request:
     paths:
       - '**.js'
@@ -18,78 +19,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  notification-policy:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      tolerate: ${{ steps.policy.outputs.tolerate }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Check consecutive refresh failures
-        id: policy
-        run: node scripts/notification-policy.js
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-
-  test:
-    needs: notification-policy
-    if: ${{ !cancelled() && (github.event_name == 'pull_request' || needs.notification-policy.result == 'success') }}
-    continue-on-error: ${{ github.event_name != 'pull_request' && needs.notification-policy.outputs.tolerate == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      passed: ${{ steps.verified.outputs.passed }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - uses: browser-actions/setup-chrome@v1
-        id: chrome
-        with:
-          chrome-version: stable
-      - run: npm ci
-      - run: npm test
-        env:
-          CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
-      - id: verified
-        run: echo "passed=true" >> "$GITHUB_OUTPUT"
-
-  update:
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.test.outputs.passed == 'true' }}
-    needs: [notification-policy, test]
-    continue-on-error: ${{ needs.notification-policy.outputs.tolerate == 'true' }}
+  refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+      - name: Check consecutive refresh failures
+        id: policy
+        if: github.event_name != 'pull_request'
+        run: node scripts/notification-policy.js
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - uses: browser-actions/setup-chrome@v1
         id: chrome
+        continue-on-error: ${{ steps.policy.outputs.tolerate == 'true' }}
         with:
           chrome-version: stable
-      - run: npm ci
+      - id: install
+        if: steps.chrome.outcome == 'success'
+        continue-on-error: ${{ steps.policy.outputs.tolerate == 'true' }}
+        run: npm ci
+      - id: tests
+        if: steps.install.outcome == 'success'
+        continue-on-error: ${{ steps.policy.outputs.tolerate == 'true' }}
+        run: npm test
+        env:
+          CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
       - name: Extract fresh query hashes
         id: scraper
+        if: github.event_name != 'pull_request' && steps.tests.outcome == 'success'
+        continue-on-error: ${{ steps.policy.outputs.tolerate == 'true' }}
         run: npm start
         env:
           CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
 
       - name: Publish run summary
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         env:
           SCRAPER_OUTCOME: ${{ steps.scraper.outcome }}
         run: |
@@ -102,7 +76,7 @@ jobs:
           fi
 
       - name: Upload diagnostics
-        if: always()
+        if: always() && github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: scrape-diagnostics
@@ -111,12 +85,24 @@ jobs:
           retention-days: 7
 
       - name: Commit fresh results
-        if: success() && steps.scraper.outcome == 'success'
+        id: commit
+        if: steps.scraper.outcome == 'success'
+        continue-on-error: ${{ steps.policy.outputs.tolerate == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add secrets/secrets.json
           if ! git diff --cached --quiet; then
             git commit -m "chore: Automatic update of OT SHA values"
-            git push
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:"${GITHUB_REF_NAME}"
           fi
+
+      # Tolerated failures leave the job green, so this step is the failure record the next run's policy reads.
+      - name: Tolerated refresh failure
+        if: >-
+          always() && steps.policy.outputs.tolerate == 'true' &&
+          (steps.chrome.outcome == 'failure' || steps.install.outcome == 'failure' ||
+          steps.tests.outcome == 'failure' || steps.scraper.outcome == 'failure' || steps.commit.outcome == 'failure')
+        run: echo "A refresh step failed; this run is tolerated and counts toward the failure streak." >> "$GITHUB_STEP_SUMMARY"

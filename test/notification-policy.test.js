@@ -8,6 +8,10 @@ const successful = [{ name: 'test', conclusion: 'success' }, { name: 'update', c
 const failed = [{ name: 'test', conclusion: 'success' }, {
   name: 'update', conclusion: 'success', steps: [{ name: 'Commit fresh results', conclusion: 'failure' }]
 }];
+const refreshOk = [{ name: 'refresh', conclusion: 'success', steps: [
+  { name: 'Tolerated refresh failure', conclusion: 'skipped' }] }];
+const refreshTolerated = [{ name: 'refresh', conclusion: 'success', steps: [
+  { name: 'Run npm test', conclusion: 'success' }, { name: 'Tolerated refresh failure', conclusion: 'success' }] }];
 const current = { id: 20, run_number: 20, head_branch: 'main', workflow_id: 1 };
 function run(id, extra = {}) {
   return { id, run_number: id, event: 'schedule', status: 'completed', conclusion: 'success', ...extra };
@@ -44,7 +48,17 @@ test('counts actual test failures, setup failures, push failures, and timeouts d
   assert.equal(refreshFailed([{ name: 'update', conclusion: 'timed_out' }]), true);
   assert.equal(refreshFailed([{ name: 'update', conclusion: 'success', steps: [{ conclusion: 'failure' }] }]), true);
   assert.equal(refreshFailed(successful), false);
+  assert.equal(refreshFailed(refreshOk), false);
+  assert.equal(refreshFailed(refreshTolerated), true);
+  assert.equal(refreshFailed([{ name: 'refresh', conclusion: 'failure' }]), true);
   assert.throws(() => refreshFailed([]), /missing/);
+});
+
+test('single-job history counts tolerated failures and mixes with older three-job history', async () => {
+  const fixture = history([run(19), run(18), run(17)], { 19: refreshTolerated, 18: refreshTolerated, 17: failed });
+  assert.equal(await previousFailures({ ...options, request: fixture.request }), 2);
+  const reset = history([run(19), run(18)], { 19: refreshOk, 18: refreshTolerated });
+  assert.equal(await previousFailures({ ...options, request: reset.request }), 0);
 });
 
 test('ignores PRs, current reruns, and newer runs; includes manual refreshes', async () => {

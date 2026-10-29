@@ -5,12 +5,17 @@ import { pathToFileURL } from 'node:url';
 const refreshEvents = new Set(['schedule', 'workflow_dispatch']);
 const failedConclusions = new Set(['failure', 'timed_out', 'startup_failure', 'action_required']);
 
+// A tolerated failure leaves the job green, so the workflow records it in this step; test/update are the
+// job names from before the refresh ran as a single job and still appear in older run history.
+const toleratedStep = 'Tolerated refresh failure';
+
 // Inspect jobs and steps: a tolerated failure has a successful workflow conclusion.
 export function refreshFailed(jobs) {
-  const relevant = jobs.filter((job) => ['test', 'update'].includes(job.name));
+  const relevant = jobs.filter((job) => ['refresh', 'test', 'update'].includes(job.name));
   if (!relevant.length) throw new Error('Refresh jobs missing from run history');
   return relevant.some((job) => failedConclusions.has(job.conclusion) ||
-    job.steps?.some((step) => failedConclusions.has(step.conclusion)));
+    job.steps?.some((step) => failedConclusions.has(step.conclusion) ||
+      (step.name === toleratedStep && step.conclusion === 'success')));
 }
 
 export async function previousFailures({ request, repository, runId }) {
